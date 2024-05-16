@@ -39,8 +39,8 @@ def bedrock_job(str_transcript):
     prompt =  """<Inputs>{$TRANSCRIPT}</Inputs>
 
                 <Instructions Structure>
-                1. Provide keywords and definitions from the transcript
-                2. Summarize the agenda of the document
+                1. Provide keywords, definition,s and dates from the transcript
+                2. Summarize the agenda of the meeting
                 3. Provide a bulleted summary of the call
                 4. List any decisions made during the call
                 5. List any action items assigned and to whom
@@ -48,17 +48,17 @@ def bedrock_job(str_transcript):
                 </Instructions Structure>
                 
                 <Instructions>
-                You will be summarizing a document. Here are the steps to follow:
+                You will be summarizing a meeting transcript. Here are the steps to follow:
                 
                 1. Read the transcript provided below:
                 <transcript>""" + generated_text + """</transcript>
                 
                 2. Identify important keywords mentioned in the transcript and provide definitions for them if possible. Write these under the heading:
                 
-                Keywords and Assumed Definitions:
-                [List keywords and definitions here]
+                Keywords, Assumed Definitions, and Dates:
+                [List keywords, definitions, and dates here]
                 
-                3. In 10 sentences or less, summarize the agenda or main purpose of the document. Write this under the heading: 
+                3. In 10 sentences or less, summarize the agenda or main purpose of the meeting. Write this under the heading: 
                 
                 Agenda:
                 [Summarize agenda here]
@@ -123,23 +123,40 @@ def lambda_handler(event, context):
     if file_type in ['txt', 'csv']:
         print("Found txt or csv")
         content_text = file_content.decode('utf-8')
+        #send to bedrock
+        print("Sending Bedrock Job")
+        summary = bedrock_job(content_text)
+        print("Returned from Bedrock job")
+        print("Entering PDF writer")
+        target_key = f"{os.environ['DESTINATION_FOLDER']}/{file_name_only}.pdf"
+        results = create_and_upload_pdf(summary, os.environ['DESTINATION_BUCKET'], target_key)
+    elif file_type in ['png', 'jpg']:
+        # summarize the image using aws rekognition
+        print("Found image")
+        rekognition_client = boto3.client('rekognition')
+        response = rekognition_client.detect_text(Image={'Bytes': file_content})
+        text_data = response['TextDetections']
+        print(response['TextDetections'])
+        text_data_str = ''
+        for text in text_data:
+            text_data_str += text['DetectedText'] + ' '
+        print(text_data_str)
+        #send to bedrock
+        print("Sending Bedrock Job")
+        summary = bedrock_job(text_data_str)
+        print("Returned from Bedrock job")
+        print("Entering PDF writer")
+        target_key = f"{os.environ['DESTINATION_FOLDER']}/{file_name_only}.pdf"
+        results = create_and_upload_pdf(summary, os.environ['DESTINATION_BUCKET'], target_key)
     else:
         print("Found unsupported file type")
         destination_key_processed = f"{file_name}"
         s3_client.copy_object(CopySource=copy_source, Bucket=os.environ['FAILED_BUCKET'], Key=destination_key_processed)
         s3_client.delete_object(Bucket=source_bucket_name, Key=file_key)
-        return {
+        results = {
             'statusCode': 500,
             'body': f"Unsupported file"
         }
-    
-    #send to bedrock
-    print("Sending Bedrock Job")
-    summary = bedrock_job(content_text)
-    print("Returned from Bedrock job")
-    print("Entering PDF writer")
-    target_key = f"{os.environ['DESTINATION_FOLDER']}/{file_name_only}.pdf"
-    results = create_and_upload_pdf(summary, os.environ['DESTINATION_BUCKET'], target_key)
     
     if results['statusCode'] == 200:
         print("Moving original file to bucket")
